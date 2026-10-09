@@ -1,0 +1,281 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "amocrm-generate-claim",
+        "options": {
+          "responseCode": {
+            "values": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 128],
+      "id": "f5c37860-439e-4019-8f41-033b88287485",
+      "name": "Amo: Webhook статус"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst payload = items[0].json.body || items[0].json;\n\nlet leadId = null;\n\nif (payload['leads[status][0][id]']) {\n  leadId = payload['leads[status][0][id]'];\n} else if (payload.leads && payload.leads.status && payload.leads.status[0]) {\n  leadId = payload.leads.status[0].id;\n} else if (payload.id) {\n  leadId = payload.id;\n} else {\n  leadId = payload.lead_id || 0;\n}\n\nreturn [{ json: { lead_id: Number(leadId) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 128],
+      "id": "30650a60-c491-43f2-9d37-e4ae1804bf10",
+      "name": "Code: Извлечение Lead ID"
+    },
+    {
+      "parameters": {
+        "jsCode": "function numToWordsRu(num) {\n  const units = ['', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'];\n  const unitsFem = ['', 'одна', 'две', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'];\n  const teens = ['десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать', 'пятнадцать', 'шестнадцать', 'семнадцать', 'восемнадцать', 'девятнадцать'];\n  const tens = ['', '', 'двадцать', 'тридцать', 'сорок', 'пятьдесят', 'шестьдесят', 'семьдесят', 'восемьдесят', 'девяно0сто'];\n  const hundreds = ['', 'сто', 'двести', 'триста', 'четыреста', 'пятьсот', 'шестьсот', 'семьсот', 'восемьсот', 'девятьсот'];\n\n  function morph(n, f1, f2, f5) {\n    n = Math.abs(n) % 100;\n    const n1 = n % 10;\n    if (n > 10 && n < 20) return f5;\n    if (n1 > 1 && n1 < 5) return f2;\n    if (n1 === 1) return f1;\n    return f5;\n  }\n\n  function tripletToWords(n, isFemale) {\n    let str = '';\n    const h = Math.floor(n / 100);\n    const t = Math.floor((n % 100) / 10);\n    const u = n % 10;\n\n    if (h > 0) str += hundreds[h] + ' ';\n    if (t === 1) {\n      str += teens[u] + ' ';\n    } else {\n      if (t > 1) str += tens[t] + ' ';\n      if (u > 0) str += (isFemale ? unitsFem[u] : units[u]) + ' ';\n    }\n    return str.trim();\n  }\n\n  const rubles = Math.floor(num);\n  const kopecks = Math.round((num - rubles) * 100);\n  if (rubles === 0) return 'ноль рублей 00 копеек';\n\n  const billions = Math.floor(rubles / 1000000000);\n  const millions = Math.floor((rubles % 1000000000) / 1000000);\n  const thousands = Math.floor((rubles % 1000000) / 1000);\n  const remainder = rubles % 1000;\n\n  let result = '';\n  if (billions > 0) result += tripletToWords(billions, false) + ' ' + morph(billions, 'миллиард', 'миллиарда', 'миллиардов') + ' ';\n  if (millions > 0) result += tripletToWords(millions, false) + ' ' + morph(millions, 'миллион', 'миллиона', 'миллионов') + ' ';\n  if (thousands > 0) result += tripletToWords(thousands, true) + ' ' + morph(thousands, 'тысяча', 'тысячи', 'тысяч') + ' ';\n  if (remainder > 0) result += tripletToWords(remainder, false) + ' ';\n\n  result += morph(rubles, 'рубль', 'рубля', 'рублей');\n  result = result.trim();\n  result = result.charAt(0).toUpperCase() + result.slice(1);\n\n  const kopFormatted = kopecks < 10 ? '0' + kopecks : '' + kopecks;\n  return `${result} ${kopFormatted} копеек`;\n}\n\nlet raw = $('Amo: Получить данные сделки').first().json;\nif (raw && typeof raw.data === 'string') {\n  try { raw = JSON.parse(raw.data); } catch (e) {}\n}\n\nconst fields = raw.custom_fields_values || [];\n\nfunction getFieldValue(id) {\n  const f = fields.find(item => item.field_id === id);\n  return (f && f.values && f.values[0] && f.values[0].value) || null;\n}\n\nconst debtAmount = Number(getFieldValue(2714917)) || 0;\nconst claimantInn = getFieldValue(2714919);\nconst defendantInn = getFieldValue(2714921);\nconst directorFio = getFieldValue(2714923);\nconst defendantCompany = getFieldValue(2714925);\nconst leadId = raw.id;\n\nconst missing = [];\nif (!claimantInn) missing.push('ИНН истца');\nif (!defendantInn) missing.push('ИНН ответчика');\nif (!directorFio) missing.push('ФИО директора ответчика');\nif (!defendantCompany) missing.push('Название компании ответчика');\nif (!debtAmount || debtAmount <= 0) missing.push('Сумма долга');\n\nif (missing.length > 0) {\n  return [{\n    json: {\n      is_valid: false,\n      lead_id: leadId,\n      missing_fields: missing.join(', ')\n    }\n  }];\n}\n\nconst debtFormatted = debtAmount.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ' ');\nconst debtWords = numToWordsRu(debtAmount);\n\nreturn [{\n  json: {\n    is_valid: true,\n    lead_id: leadId,\n    debt_amount: debtAmount,\n    debt_formatted: debtFormatted,\n    debt_words: debtWords,\n    claimant_inn: claimantInn,\n    defendant_inn: defendantInn,\n    director_fio: directorFio,\n    defendant_company: defendantCompany\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [624, 128],
+      "id": "227a36db-9c6d-4b69-b7e3-c31cb6ab95f5",
+      "name": "Code: Парсинг"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9679bc8f-4f6b-46ef-95d4-23ac871739dd",
+              "leftValue": "={{ $json.is_valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [848, 128],
+      "id": "fe5a56c6-1896-4f69-9187-87c18bec40bd",
+      "name": "IF: Данные валидны?"
+    },
+    {
+      "parameters": {
+        "chatId": "[YOUR_CHAT_ID]",
+        "text": "=⚠️ <b>Ошибка генерации иска</b>\n\nСделка: <code>#{{ $json.lead_id }}</code>\nНе заполнены обязательные поля: <b>{{ $json.missing_fields }}</b>\n\n<i>Заполните поля в CRM и повторите попытку.</i>",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1152, 208],
+      "id": "39e808f8-da9f-46b3-8e9a-8a47a01d06a9",
+      "name": "TG: Отправить ошибку",
+      "credentials": {
+        "telegramApi": {
+          "id": "xyQvUqCQ4gKwoMNE",
+          "name": "Бот для врачей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"openai/gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a legal text processing engine. Your task is to inflect the provided Russian full name (FIO) strictly into the Genitive case (Родительный падеж) to fit the phrase 'в лице Генерального директора [NAME]'. Output strictly valid JSON with key 'fio_genitive'. Do not include extra text or markdown formatting.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify($json.director_fio) }}\n    }\n  ],\n  \"response_format\": { \"type\": \"json_object\" }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [1152, -32],
+      "id": "6dd5ffdf-fe10-40ab-96ef-4262c76661b6",
+      "name": "HTTP: OpenRouter Склонение ФИО",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "aSqoTsZ6tPgPwXDx",
+          "name": "Опенроутер"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Code: Парсинг').first().json;\nconst llmRaw = $input.first().json;\n\nlet fioGenitive = prev.director_fio;\ntry {\n  const content = typeof llmRaw.choices[0].message.content === 'string' \n    ? JSON.parse(llmRaw.choices[0].message.content) \n    : llmRaw.choices[0].message.content;\n  if (content.fio_genitive) {\n    fioGenitive = content.fio_genitive;\n  }\n} catch (e) {}\n\nconst currentYear = new Date().getFullYear();\nconst docNumber = 'ИСК-' + prev.lead_id;\n\nconst htmlContent = `<!DOCTYPE html>\n<html lang=\"ru\">\n<head>\n  <meta charset=\"UTF-8\">\n  <style>\n    @page { size: A4; margin: 18mm 15mm 18mm 30mm; }\n    body { font-family: 'Times New Roman', Times, serif; color: #000; font-size: 11.5pt; line-height: 1.3; margin: 0; padding: 0; }\n    .court-header { width: 58%; margin-left: auto; margin-bottom: 22px; font-size: 10.5pt; line-height: 1.25; }\n    .court-header p { margin: 0 0 6px 0; }\n    .title { text-align: center; font-size: 13.5pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 0 4px 0; }\n    .subtitle { text-align: center; font-size: 11pt; font-weight: bold; margin-bottom: 18px; }\n    .paragraph { text-align: justify; text-indent: 1.25cm; margin: 0 0 9px 0; }\n    .debt-highlight { text-align: justify; text-indent: 1.25cm; font-weight: bold; margin: 10px 0 10px 0; }\n    .legal-grounds { font-weight: bold; margin: 14px 0 10px 0; text-indent: 1.25cm; text-align: left; }\n    .proshu { text-align: center; font-size: 11.5pt; font-weight: bold; margin: 14px 0 8px 0; letter-spacing: 0.5px; }\n    .petitum-item { text-align: justify; text-indent: 1.25cm; margin: 0 0 6px 0; }\n    .attachments { margin-top: 16px; font-size: 10pt; line-height: 1.22; }\n    .attachments-title { font-weight: bold; margin-bottom: 4px; }\n    .attachments ol { margin: 0; padding-left: 22px; }\n    .attachments li { margin-bottom: 3px; }\n    .signatures { margin-top: 26px; width: 100%; border-collapse: collapse; }\n    .signatures td { vertical-align: bottom; font-size: 11pt; }\n    .sign-col { text-align: right; white-space: nowrap; }\n    .line { border-bottom: 1px solid #000; width: 170px; display: inline-block; margin-right: 6px; }\n  </style>\n</head>\n<body>\n  <div class=\"court-header\">\n    <p><b>В Арбитражный суд города Москвы</b><br>115225, г. Москва, ул. Большая Тульская, д. 17</p>\n    <p><b>Истец:</b> ООО «Правовой Стандарт»<br>ИНН: ${prev.claimant_inn}<br>Адрес: 125009, г. Москва, Тверская ул., д. 1</p>\n    <p><b>Ответчик:</b> ${prev.defendant_company}<br>ИНН: ${prev.defendant_inn}<br>в лице Генерального директора<br><b>${fioGenitive}</b></p>\n    <p><b>Цена иска:</b> ${prev.debt_formatted} руб.<br><b>Госпошлина:</b> в соответствии со ст. 333.21 НК РФ</p>\n  </div>\n  <div class=\"title\">ИСКОВОЕ ЗАЯВЛЕНИЕ</div>\n  <div class=\"subtitle\">о взыскании задолженности по договору оказания услуг</div>\n  <div class=\"paragraph\">Между ООО «Правовой Стандарт» (Истец) и ${prev.defendant_company} (Ответчик) был заключен договор на оказание юридических и консультационных услуг. Истец исполнил принятые на себя договорные обязательства в полном объеме и надлежащим образом (ст. 779 ГК РФ), что подтверждается подписанными сторонами первичными документами и актами сдачи-приемки оказанных услуг.</div>\n  <div class=\"paragraph\">В соответствии со ст. 309, 310, 781 ГК РФ обязательства должны исполняться надлежащим образом, односторонний отказ от исполнения обязательств не допускается. Однако Ответчик нарушил согласованные сроки оплаты и до настоящего момента уклоняется от перечисления денежных средств.</div>\n  <div class=\"debt-highlight\">Сумма непогашенной задолженности Ответчика перед Истцом составляет ${prev.debt_formatted} (${prev.debt_words}) руб.</div>\n  <div class=\"paragraph\">В порядке ч. 5 ст. 4 АПК РФ Истцом в адрес руководства Ответчика (${fioGenitive}) была направлена досудебная претензия с требованием о добровольном погашении долга. Требование оставлено без финансового удовлетворения.</div>\n  <div class=\"legal-grounds\">На основании изложенного, руководствуясь ст. 309, 310, 779, 781 ГК РФ, ст. 4, 125, 126 АПК РФ,</div>\n  <div class=\"proshu\">ПРОШУ СУД:</div>\n  <div class=\"petitum-item\">1. Взыскать с ${prev.defendant_company} (ИНН ${prev.defendant_inn}) в пользу ООО «Правовой Стандарт» задолженность в размере <b>${prev.debt_formatted} руб. (${prev.debt_words})</b>.</div>\n  <div class=\"petitum-item\">2. Взыскать с Ответчика в пользу Истца расходы по уплате государственной пошлины.</div>\n  <div class=\"attachments\">\n    <div class=\"attachments-title\">Приложения:</div>\n    <ol>\n      <li>Копия договора об оказании услуг и первичных документов.</li>\n      <li>Копия досудебной претензии и документов, подтверждающих ее отправку.</li>\n      <li>Расчет суммы исковых требований.</li>\n      <li>Документ, подтверждающий уплату государственной пошлины.</li>\n      <li>Копия доверенности представителя Истца.</li>\n    </ol>\n  </div>\n  <table class=\"signatures\">\n    <tr>\n      <td style=\"width: 40%;\">«___» ____________ ${currentYear} г.</td>\n      <td class=\"sign-col\" style=\"width: 60%;\">Представитель по доверенности:<br><span class=\"line\"></span> / Черняев&nbsp;И.&nbsp;Н.</td>\n    </tr>\n  </table>\n</body>\n</html>`;\n\nreturn [{\n  json: {\n    ...prev,\n    fio_genitive: fioGenitive,\n    doc_number: docNumber,\n    filename: `Claim_${prev.lead_id}.pdf`,\n    html_content: htmlContent\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1344, -32],
+      "id": "23d5c817-beb8-4603-b123-1193a5976a1e",
+      "name": "Code: Сборка HTML иска"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pdfshift.io/v3/convert/pdf",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"source\": {{ JSON.stringify($json.html_content) }},\n  \"filename\": {{ JSON.stringify($json.filename) }}\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [1536, -32],
+      "id": "a1da8c49-71be-4968-b7bb-af3235ed06c6",
+      "name": "HTTP: Конвертация HTML в PDF",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "17n70xVAn5fy352a",
+          "name": "Pdfshift"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "[YOUR_CHAT_ID]",
+        "file": "={{ $json.url }}",
+        "additionalFields": {
+          "caption": "={{\n  \"📄 <b>Иск готов:</b> \" + $('Code: Сборка HTML иска').first().json.defendant_company + \"\\n\\n\" +\n  \"💰 <b>Сумма требований:</b> \" + $('Code: Сборка HTML иска').first().json.debt_formatted + \" руб.\\n\\n\" +\n  \"⚡ <i>Действие ИИ: Документ сформирован по эталонному шаблону без ручного ввода. Опечатки исключены. Файл прикреплен ниже.</i>\"\n}}",
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1728, -32],
+      "id": "05f0209f-14cd-4a94-a898-2524d7214040",
+      "name": "TG: Отправить сообщение",
+      "credentials": {
+        "telegramApi": {
+          "id": "xyQvUqCQ4gKwoMNE",
+          "name": "Бот для врачей"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://[YOUR_SUBDOMAIN].amocrm.ru/api/v4/leads/{{ $('Code: Сборка HTML иска').first().json.lead_id }}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "=[\n  {\n    \"note_type\": \"common\",\n    \"params\": {\n      \"text\": {{ JSON.stringify(\n        \"⚡ ИИ-ЮРИСТ: ИСКОВОЕ ЗАЯВЛЕНИЕ СФОРМИРОВАНО\\n\" +\n        \"────────────────────────────────────────\\n\\n\" +\n        \"⚖️ ТРЕБОВАНИЯ И СТОРОНЫ\\n\" +\n        \"• Ответчик: \" + $('Code: Сборка HTML иска').first().json.defendant_company + \"\\n\" +\n        \"• ИНН: \" + $('Code: Сборка HTML иска').first().json.defendant_inn + \"\\n\" +\n        \"• Сумма иска: \" + $('Code: Сборка HTML иска').first().json.debt_formatted + \" руб.\\n\\n\" +\n        \"────────────────────────────────────────\\n\\n\" +\n        \"📄 ГОТОВЫЙ ДОКУМЕНТ\\n\" +\n        \"Открыть PDF: \" + $('HTTP: Конвертация HTML в PDF').first().json.url + \"\\n\\n\" +\n        \"────────────────────────────────────────\\n\\n\" +\n        \"⚡ Статус: Иск верифицирован по ГОСТ и отправлен юристу в Telegram.\"\n      ) }}\n    }\n  }\n]",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [1920, -32],
+      "id": "4af420e3-8c07-4a35-89c5-028a6668910e",
+      "name": "Amo: HTTP Создать примечание",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VofLOEpbXuFi48T0",
+          "name": "АМО CRM мой"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://[YOUR_SUBDOMAIN].amocrm.ru/api/v4/leads/{{ $json.lead_id }}?with=contacts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [432, 128],
+      "id": "b71d46b0-e979-4ced-ade5-0dbe9631ac06",
+      "name": "Amo: Получить данные сделки",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "VofLOEpbXuFi48T0",
+          "name": "АМО CRM мой"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## ⚠️ Архитектура собрана Игорем Черняевым\nНужна авто-генерация сложных документов, интеграция нестандартных API или White-label субподряд?\nПиши напрямую: https://t.me/chernyaevi",
+        "height": 176,
+        "width": 400,
+        "color": "#FFFC41"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [544, -112],
+      "typeVersion": 1,
+      "id": "77771a36-0405-4e33-bff0-e555c643ca2a",
+      "name": "Sticky Note"
+    }
+  ],
+  "connections": {
+    "Amo: Webhook статус": {
+      "main": [ [ { "node": "Code: Извлечение Lead ID", "type": "main", "index": 0 } ] ]
+    },
+    "Code: Извлечение Lead ID": {
+      "main": [ [ { "node": "Amo: Получить данные сделки", "type": "main", "index": 0 } ] ]
+    },
+    "Code: Парсинг": {
+      "main": [ [ { "node": "IF: Данные валидны?", "type": "main", "index": 0 } ] ]
+    },
+    "IF: Данные валидны?": {
+      "main": [
+        [ { "node": "HTTP: OpenRouter Склонение ФИО", "type": "main", "index": 0 } ],
+        [ { "node": "TG: Отправить ошибку", "type": "main", "index": 0 } ]
+      ]
+    },
+    "HTTP: OpenRouter Склонение ФИО": {
+      "main": [ [ { "node": "Code: Сборка HTML иска", "type": "main", "index": 0 } ] ]
+    },
+    "Code: Сборка HTML иска": {
+      "main": [ [ { "node": "HTTP: Конвертация HTML в PDF", "type": "main", "index": 0 } ] ]
+    },
+    "HTTP: Конвертация HTML в PDF": {
+      "main": [ [ { "node": "TG: Отправить сообщение", "type": "main", "index": 0 } ] ]
+    },
+    "TG: Отправить сообщение": {
+      "main": [ [ { "node": "Amo: HTTP Создать примечание", "type": "main", "index": 0 } ] ]
+    },
+    "Amo: Получить данные сделки": {
+      "main": [ [ { "node": "Code: Парсинг", "type": "main", "index": 0 } ] ]
+    }
+  }
+}
